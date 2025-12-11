@@ -4,38 +4,80 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.datasets import make_regression, make_classification
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, learning_curve
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from sklearn.svm import SVR, SVC
-from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, classification_report, confusion_matrix, mean_absolute_error
+from sklearn.metrics import (mean_squared_error, r2_score, accuracy_score, classification_report, 
+                             confusion_matrix, mean_absolute_error, roc_curve, auc, roc_auc_score)
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.feature_selection import RFE, SelectKBest, f_classif, f_regression
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pickle
+import io
+import base64
+from datetime import datetime
+import json
 
 # Set page config
 st.set_page_config(page_title="Synthetic Data Modeling", layout="wide", page_icon="📊")
 
-# Custom CSS
-st.markdown("""
-    <style>
-    .main-header {
-        font-size: 3rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #ff7f0e;
-        margin-top: 2rem;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# Initialize session state for dark mode
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = False
+
+# Custom CSS with dark mode support
+if st.session_state.dark_mode:
+    st.markdown("""
+        <style>
+        .main-header {
+            font-size: 3rem;
+            color: #64b5f6;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .sub-header {
+            font-size: 1.5rem;
+            color: #ffb74d;
+            margin-top: 2rem;
+        }
+        .stApp {
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+        <style>
+        .main-header {
+            font-size: 3rem;
+            color: #1f77b4;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .sub-header {
+            font-size: 1.5rem;
+            color: #ff7f0e;
+            margin-top: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
 # Title
 st.markdown('<h1 class="main-header">📊 Synthetic Data Modeling & Simulation</h1>', unsafe_allow_html=True)
+
+# Dark mode toggle
+col1, col2, col3 = st.columns([1, 1, 8])
+with col2:
+    if st.button("🌓 Toggle Theme"):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+        st.rerun()
+
 st.markdown("---")
 
 # Sidebar for configuration
@@ -91,6 +133,10 @@ if 'data_generated' not in st.session_state:
     st.session_state.data_generated = False
 if 'model_trained' not in st.session_state:
     st.session_state.model_trained = False
+if 'experiment_history' not in st.session_state:
+    st.session_state.experiment_history = []
+if 'experiment_counter' not in st.session_state:
+    st.session_state.experiment_counter = 0
 
 # Main content
 if generate_data or st.session_state.data_generated:
@@ -250,6 +296,180 @@ if generate_data or st.session_state.data_generated:
             with col2:
                 st.metric("Min", f"{st.session_state.y.min():.2f}")
                 st.metric("Max", f"{st.session_state.y.max():.2f}")
+    
+    # Step 2.5: Advanced Feature Engineering & Analysis
+    st.markdown('<h2 class="sub-header">2.5️⃣ Advanced Feature Engineering & Analysis</h2>', unsafe_allow_html=True)
+    
+    fe_tabs = st.tabs(["🔧 Feature Transforms", "🎯 Feature Selection", "📉 Dimensionality Reduction", "🔍 3D Visualization"])
+    
+    with fe_tabs[0]:
+        st.subheader("Feature Transformations")
+        st.write("Apply mathematical transformations to features")
+        
+        transform_type = st.selectbox(
+            "Select Transformation",
+            ["None", "Logarithmic (log1p)", "Exponential", "Square Root", "Square"]
+        )
+        
+        if transform_type != "None":
+            transform_features = st.multiselect(
+                "Select features to transform",
+                st.session_state.feature_names,
+                default=[]
+            )
+            
+            if transform_features and st.button("Apply Transformation"):
+                df_transformed = st.session_state.df.copy()
+                for feature in transform_features:
+                    if transform_type == "Logarithmic (log1p)":
+                        df_transformed[f"{feature}_log"] = np.log1p(df_transformed[feature] - df_transformed[feature].min() + 1)
+                    elif transform_type == "Exponential":
+                        df_transformed[f"{feature}_exp"] = np.exp(df_transformed[feature])
+                    elif transform_type == "Square Root":
+                        df_transformed[f"{feature}_sqrt"] = np.sqrt(df_transformed[feature] - df_transformed[feature].min())
+                    elif transform_type == "Square":
+                        df_transformed[f"{feature}_sq"] = df_transformed[feature] ** 2
+                
+                st.session_state.df_transformed = df_transformed
+                st.success(f"✅ Applied {transform_type} transformation to {len(transform_features)} features")
+                st.dataframe(df_transformed.head(), use_container_width=True)
+    
+    with fe_tabs[1]:
+        st.subheader("Automated Feature Selection")
+        
+        selection_method = st.radio(
+            "Select Method",
+            ["SelectKBest", "Recursive Feature Elimination (RFE)"]
+        )
+        
+        k_features = st.slider("Number of features to select", 1, n_features, min(5, n_features))
+        
+        if st.button("Run Feature Selection"):
+            with st.spinner("Selecting features..."):
+                if selection_method == "SelectKBest":
+                    if problem_type == "Classification":
+                        selector = SelectKBest(f_classif, k=k_features)
+                    else:
+                        selector = SelectKBest(f_regression, k=k_features)
+                    selector.fit(st.session_state.X, st.session_state.y)
+                    scores = selector.scores_
+                    selected_mask = selector.get_support()
+                else:  # RFE
+                    if problem_type == "Classification":
+                        estimator = RandomForestClassifier(n_estimators=50, random_state=random_state)
+                    else:
+                        estimator = RandomForestRegressor(n_estimators=50, random_state=random_state)
+                    selector = RFE(estimator, n_features_to_select=k_features)
+                    selector.fit(st.session_state.X, st.session_state.y)
+                    selected_mask = selector.support_
+                    scores = selector.ranking_
+                
+                # Create results dataframe
+                results_df = pd.DataFrame({
+                    'Feature': st.session_state.feature_names,
+                    'Selected': selected_mask,
+                    'Score/Rank': scores
+                }).sort_values('Score/Rank', ascending=(selection_method == "RFE"))
+                
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Visualization
+                fig = px.bar(results_df, x='Feature', y='Score/Rank', 
+                            color='Selected',
+                            title=f"Feature {selection_method} Results")
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.session_state.selected_features = [f for f, s in zip(st.session_state.feature_names, selected_mask) if s]
+    
+    with fe_tabs[2]:
+        st.subheader("PCA - Dimensionality Reduction")
+        
+        n_components = st.slider("Number of Components", 2, min(10, n_features), 2)
+        
+        if st.button("Apply PCA"):
+            with st.spinner("Performing PCA..."):
+                pca = PCA(n_components=n_components)
+                X_pca = pca.fit_transform(st.session_state.X)
+                
+                # Explained variance
+                explained_var = pca.explained_variance_ratio_
+                cumulative_var = np.cumsum(explained_var)
+                
+                st.session_state.X_pca = X_pca
+                st.session_state.pca = pca
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Scree plot
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=[f'PC{i+1}' for i in range(n_components)],
+                        y=explained_var * 100,
+                        name='Individual'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=[f'PC{i+1}' for i in range(n_components)],
+                        y=cumulative_var * 100,
+                        name='Cumulative',
+                        yaxis='y2'
+                    ))
+                    fig.update_layout(
+                        title='Explained Variance by Component',
+                        yaxis=dict(title='Variance Explained (%)'),
+                        yaxis2=dict(title='Cumulative (%)', overlaying='y', side='right')
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    # PCA scatter plot
+                    pca_df = pd.DataFrame(X_pca[:, :2], columns=['PC1', 'PC2'])
+                    pca_df['Target'] = st.session_state.y
+                    
+                    fig = px.scatter(pca_df, x='PC1', y='PC2', color='Target',
+                                   title='PCA: First Two Components')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                st.info(f"✨ Total variance explained by {n_components} components: {cumulative_var[-1]*100:.2f}%")
+    
+    with fe_tabs[3]:
+        st.subheader("3D Feature Relationships")
+        
+        if n_features >= 3:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                x_feature = st.selectbox("X-axis", st.session_state.feature_names, index=0)
+            with col2:
+                y_feature = st.selectbox("Y-axis", st.session_state.feature_names, index=1)
+            with col3:
+                z_feature = st.selectbox("Z-axis", st.session_state.feature_names, index=min(2, n_features-1))
+            
+            fig = go.Figure(data=[go.Scatter3d(
+                x=st.session_state.df[x_feature],
+                y=st.session_state.df[y_feature],
+                z=st.session_state.df[z_feature],
+                mode='markers',
+                marker=dict(
+                    size=4,
+                    color=st.session_state.y,
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(title="Target")
+                )
+            )])
+            
+            fig.update_layout(
+                title='3D Feature Space Visualization',
+                scene=dict(
+                    xaxis_title=x_feature,
+                    yaxis_title=y_feature,
+                    zaxis_title=z_feature
+                ),
+                height=600
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Need at least 3 features for 3D visualization")
     
     # Step 3: Apply Modeling Technique
     st.markdown('<h2 class="sub-header">3️⃣ Apply Modeling Technique</h2>', unsafe_allow_html=True)
@@ -417,16 +637,130 @@ if generate_data or st.session_state.data_generated:
                 fig.update_layout(xaxis_title="Residuals", yaxis_title="Frequency")
                 st.plotly_chart(fig, use_container_width=True)
             
-            # Feature importance
-            st.subheader("Feature Coefficients")
-            coef_df = pd.DataFrame({
-                'Feature': st.session_state.feature_names,
-                'Coefficient': st.session_state.model.coef_
-            }).sort_values('Coefficient', key=abs, ascending=False)
+            # Advanced Regression Visualizations
+            st.markdown("---")
+            st.subheader("📊 Advanced Analysis")
             
-            fig = px.bar(coef_df, x='Feature', y='Coefficient',
-                        title="Feature Importance (Coefficients)")
-            st.plotly_chart(fig, use_container_width=True)
+            adv_tabs = st.tabs(["📉 Residual Plots", "📈 Learning Curves", "🎯 Feature Importance"])
+            
+            with adv_tabs[0]:
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Residuals vs Fitted
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=st.session_state.y_pred_test,
+                        y=residuals_test,
+                        mode='markers',
+                        marker=dict(color='blue', opacity=0.5)
+                    ))
+                    fig.add_hline(y=0, line_dash="dash", line_color="red")
+                    fig.update_layout(
+                        title="Residuals vs Fitted Values",
+                        xaxis_title="Fitted Values",
+                        yaxis_title="Residuals"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    # Q-Q Plot
+                    from scipy import stats
+                    residuals_sorted = np.sort(residuals_test)
+                    theoretical_quantiles = stats.norm.ppf(np.linspace(0.01, 0.99, len(residuals_sorted)))
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=theoretical_quantiles,
+                        y=residuals_sorted,
+                        mode='markers',
+                        name='Residuals'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=[theoretical_quantiles.min(), theoretical_quantiles.max()],
+                        y=[theoretical_quantiles.min(), theoretical_quantiles.max()],
+                        mode='lines',
+                        name='Normal',
+                        line=dict(color='red', dash='dash')
+                    ))
+                    fig.update_layout(
+                        title="Q-Q Plot",
+                        xaxis_title="Theoretical Quantiles",
+                        yaxis_title="Sample Quantiles"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with adv_tabs[1]:
+                # Learning Curves
+                with st.spinner("Generating learning curves..."):
+                    train_sizes = np.linspace(0.1, 1.0, 10)
+                    train_sizes_abs, train_scores, test_scores = learning_curve(
+                        st.session_state.model, st.session_state.X_train, st.session_state.y_train,
+                        train_sizes=train_sizes, cv=5, scoring='neg_mean_squared_error', n_jobs=-1
+                    )
+                    
+                    train_scores_mean = -train_scores.mean(axis=1)
+                    train_scores_std = train_scores.std(axis=1)
+                    test_scores_mean = -test_scores.mean(axis=1)
+                    test_scores_std = test_scores.std(axis=1)
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=train_sizes_abs, y=train_scores_mean,
+                        name='Training Score',
+                        mode='lines+markers',
+                        line=dict(color='blue'),
+                        error_y=dict(type='data', array=train_scores_std, visible=True)
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=train_sizes_abs, y=test_scores_mean,
+                        name='Cross-validation Score',
+                        mode='lines+markers',
+                        line=dict(color='green'),
+                        error_y=dict(type='data', array=test_scores_std, visible=True)
+                    ))
+                    fig.update_layout(
+                        title="Learning Curves",
+                        xaxis_title="Training Examples",
+                        yaxis_title="Mean Squared Error",
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.info("📊 Learning curves show how model performance changes with training set size. Converging lines suggest the model is well-tuned.")
+            
+            with adv_tabs[2]:
+                # Feature Importance
+                if hasattr(st.session_state.model, 'coef_'):
+                    coef_df = pd.DataFrame({
+                        'Feature': st.session_state.feature_names,
+                        'Coefficient': st.session_state.model.coef_
+                    }).sort_values('Coefficient', key=abs, ascending=False)
+                    
+                    fig = px.bar(coef_df, x='Feature', y='Coefficient',
+                                title="Feature Coefficients (Linear Model)")
+                    st.plotly_chart(fig, use_container_width=True)
+                elif hasattr(st.session_state.model, 'feature_importances_'):
+                    importance_df = pd.DataFrame({
+                        'Feature': st.session_state.feature_names,
+                        'Importance': st.session_state.model.feature_importances_
+                    }).sort_values('Importance', ascending=False)
+                    
+                    fig = px.bar(importance_df, x='Feature', y='Importance',
+                                title="Feature Importance (Tree-based Model)")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Feature importance not available for this model type")
+            
+            # Remove old feature importance section
+            # st.subheader("Feature Coefficients")
+            # coef_df = pd.DataFrame({
+            #     'Feature': st.session_state.feature_names,
+            #     'Coefficient': st.session_state.model.coef_
+            # }).sort_values('Coefficient', key=abs, ascending=False)
+            
+            # fig = px.bar(coef_df, x='Feature', y='Coefficient',
+            #             title="Feature Importance (Coefficients)")
+            # st.plotly_chart(fig, use_container_width=True)
             
         else:  # Classification
             # Metrics
@@ -462,6 +796,199 @@ if generate_data or st.session_state.data_generated:
             report = classification_report(st.session_state.y_test, st.session_state.y_pred_test, output_dict=True)
             report_df = pd.DataFrame(report).transpose()
             st.dataframe(report_df, use_container_width=True)
+            
+            # Advanced Classification Visualizations
+            st.markdown("---")
+            st.subheader("📊 Advanced Analysis")
+            
+            class_tabs = st.tabs(["📉 ROC Curves", "📈 Learning Curves", "🎯 Feature Importance", "🔥 Enhanced Confusion Matrix"])
+            
+            with class_tabs[0]:
+                # ROC Curves (for binary and multiclass)
+                n_classes = len(np.unique(st.session_state.y_train))
+                
+                if n_classes == 2:
+                    # Binary classification
+                    if hasattr(st.session_state.model, 'predict_proba'):
+                        y_score = st.session_state.model.predict_proba(st.session_state.X_test)[:, 1]
+                        fpr, tpr, _ = roc_curve(st.session_state.y_test, y_score)
+                        roc_auc = auc(fpr, tpr)
+                        
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(
+                            x=fpr, y=tpr,
+                            name=f'ROC curve (AUC = {roc_auc:.3f})',
+                            mode='lines',
+                            line=dict(color='blue', width=2)
+                        ))
+                        fig.add_trace(go.Scatter(
+                            x=[0, 1], y=[0, 1],
+                            name='Random Classifier',
+                            mode='lines',
+                            line=dict(color='red', dash='dash')
+                        ))
+                        fig.update_layout(
+                            title='Receiver Operating Characteristic (ROC) Curve',
+                            xaxis_title='False Positive Rate',
+                            yaxis_title='True Positive Rate',
+                            hovermode='closest'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("AUC Score", f"{roc_auc:.4f}")
+                        with col2:
+                            if roc_auc >= 0.9:
+                                st.success("Excellent classifier!")
+                            elif roc_auc >= 0.8:
+                                st.info("Good classifier")
+                            else:
+                                st.warning("Fair classifier")
+                    else:
+                        st.warning("ROC curve requires probability predictions. This model doesn't support predict_proba()")
+                else:
+                    # Multiclass ROC
+                    if hasattr(st.session_state.model, 'predict_proba'):
+                        from sklearn.preprocessing import label_binarize
+                        y_test_bin = label_binarize(st.session_state.y_test, classes=np.unique(st.session_state.y_train))
+                        y_score = st.session_state.model.predict_proba(st.session_state.X_test)
+                        
+                        fig = go.Figure()
+                        for i in range(n_classes):
+                            fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_score[:, i])
+                            roc_auc = auc(fpr, tpr)
+                            fig.add_trace(go.Scatter(
+                                x=fpr, y=tpr,
+                                name=f'Class {i} (AUC = {roc_auc:.3f})',
+                                mode='lines'
+                            ))
+                        
+                        fig.add_trace(go.Scatter(
+                            x=[0, 1], y=[0, 1],
+                            name='Random',
+                            mode='lines',
+                            line=dict(color='black', dash='dash')
+                        ))
+                        fig.update_layout(
+                            title='ROC Curves - Multiclass',
+                            xaxis_title='False Positive Rate',
+                            yaxis_title='True Positive Rate'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning("ROC curve requires probability predictions")
+            
+            with class_tabs[1]:
+                # Learning Curves
+                with st.spinner("Generating learning curves..."):
+                    train_sizes = np.linspace(0.1, 1.0, 10)
+                    train_sizes_abs, train_scores, test_scores = learning_curve(
+                        st.session_state.model, st.session_state.X_train, st.session_state.y_train,
+                        train_sizes=train_sizes, cv=5, scoring='accuracy', n_jobs=-1
+                    )
+                    
+                    train_scores_mean = train_scores.mean(axis=1)
+                    train_scores_std = train_scores.std(axis=1)
+                    test_scores_mean = test_scores.mean(axis=1)
+                    test_scores_std = test_scores.std(axis=1)
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=train_sizes_abs, y=train_scores_mean,
+                        name='Training Score',
+                        mode='lines+markers',
+                        line=dict(color='blue'),
+                        error_y=dict(type='data', array=train_scores_std, visible=True)
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=train_sizes_abs, y=test_scores_mean,
+                        name='Cross-validation Score',
+                        mode='lines+markers',
+                        line=dict(color='green'),
+                        error_y=dict(type='data', array=test_scores_std, visible=True)
+                    ))
+                    fig.update_layout(
+                        title="Learning Curves",
+                        xaxis_title="Training Examples",
+                        yaxis_title="Accuracy Score",
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.info("📊 Learning curves show model performance vs training size. Converging lines indicate good generalization.")
+            
+            with class_tabs[2]:
+                # Feature Importance
+                if hasattr(st.session_state.model, 'coef_'):
+                    # For logistic regression with binary classification
+                    if n_classes == 2:
+                        coef_df = pd.DataFrame({
+                            'Feature': st.session_state.feature_names,
+                            'Coefficient': st.session_state.model.coef_[0]
+                        }).sort_values('Coefficient', key=abs, ascending=False)
+                        
+                        fig = px.bar(coef_df, x='Feature', y='Coefficient',
+                                    title="Feature Coefficients (Logistic Regression)")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.write("Multiclass coefficients:")
+                        for i in range(n_classes):
+                            st.write(f"**Class {i}:**")
+                            coef_df = pd.DataFrame({
+                                'Feature': st.session_state.feature_names,
+                                'Coefficient': st.session_state.model.coef_[i]
+                            }).sort_values('Coefficient', key=abs, ascending=False)
+                            st.dataframe(coef_df.head(5))
+                elif hasattr(st.session_state.model, 'feature_importances_'):
+                    importance_df = pd.DataFrame({
+                        'Feature': st.session_state.feature_names,
+                        'Importance': st.session_state.model.feature_importances_
+                    }).sort_values('Importance', ascending=False)
+                    
+                    fig = px.bar(importance_df, x='Feature', y='Importance',
+                                title="Feature Importance (Tree-based Model)")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Feature importance not available for this model type")
+            
+            with class_tabs[3]:
+                # Enhanced confusion matrix with percentages
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    cm_train = confusion_matrix(st.session_state.y_train, st.session_state.y_pred_train)
+                    cm_train_pct = cm_train.astype('float') / cm_train.sum(axis=1)[:, np.newaxis] * 100
+                    
+                    fig = go.Figure(data=go.Heatmap(
+                        z=cm_train_pct,
+                        x=[f'Pred {i}' for i in range(len(cm_train))],
+                        y=[f'Actual {i}' for i in range(len(cm_train))],
+                        text=[[f'{cm_train[i,j]}<br>({cm_train_pct[i,j]:.1f}%)' 
+                               for j in range(len(cm_train[i]))] for i in range(len(cm_train))],
+                        texttemplate='%{text}',
+                        colorscale='Blues',
+                        showscale=True
+                    ))
+                    fig.update_layout(title='Training Confusion Matrix (%)')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    cm_test = confusion_matrix(st.session_state.y_test, st.session_state.y_pred_test)
+                    cm_test_pct = cm_test.astype('float') / cm_test.sum(axis=1)[:, np.newaxis] * 100
+                    
+                    fig = go.Figure(data=go.Heatmap(
+                        z=cm_test_pct,
+                        x=[f'Pred {i}' for i in range(len(cm_test))],
+                        y=[f'Actual {i}' for i in range(len(cm_test))],
+                        text=[[f'{cm_test[i,j]}<br>({cm_test_pct[i,j]:.1f}%)' 
+                               for j in range(len(cm_test[i]))] for i in range(len(cm_test))],
+                        texttemplate='%{text}',
+                        colorscale='Blues',
+                        showscale=True
+                    ))
+                    fig.update_layout(title='Test Confusion Matrix (%)')
+                    st.plotly_chart(fig, use_container_width=True)
         
         # Step 5: Simulate Outcomes
         st.markdown('<h2 class="sub-header">5️⃣ Generate Simulated Outcomes</h2>', unsafe_allow_html=True)
@@ -533,6 +1060,227 @@ if generate_data or st.session_state.data_generated:
                                      y_sim_pred.min(), y_sim_pred.max()]
                     })
                     st.dataframe(comp_df, use_container_width=True)
+        
+        # Step 6: Model Management & Deployment
+        st.markdown('<h2 class="sub-header">6️⃣ Model Management & Deployment</h2>', unsafe_allow_html=True)
+        
+        mgmt_tabs = st.tabs(["💾 Save/Load Model", "🎯 Make Predictions", "📊 Session History", "📄 Export Report"])
+        
+        with mgmt_tabs[0]:
+            st.subheader("Model Persistence")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Save Current Model**")
+                model_name = st.text_input("Model Name", value=f"{algorithm.replace(' ', '_')}_{problem_type}")
+                
+                if st.button("💾 Save Model"):
+                    # Create model package
+                    model_package = {
+                        'model': st.session_state.model,
+                        'scaler': st.session_state.scaler if 'scaler' in st.session_state else None,
+                        'feature_names': st.session_state.feature_names,
+                        'algorithm': algorithm,
+                        'problem_type': problem_type,
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    # Serialize to bytes
+                    model_bytes = pickle.dumps(model_package)
+                    
+                    st.download_button(
+                        label="📥 Download Model File",
+                        data=model_bytes,
+                        file_name=f"{model_name}.pkl",
+                        mime="application/octet-stream"
+                    )
+                    st.success("✅ Model ready for download!")
+            
+            with col2:
+                st.write("**Load Saved Model**")
+                uploaded_model = st.file_uploader("Upload Model File (.pkl)", type=['pkl'])
+                
+                if uploaded_model is not None:
+                    try:
+                        model_package = pickle.loads(uploaded_model.read())
+                        st.session_state.model = model_package['model']
+                        st.session_state.scaler = model_package['scaler']
+                        st.session_state.feature_names = model_package['feature_names']
+                        
+                        st.success(f"✅ Loaded model: {model_package['algorithm']}")
+                        st.info(f"Problem Type: {model_package['problem_type']}")
+                        st.info(f"Saved: {model_package['timestamp']}")
+                    except Exception as e:
+                        st.error(f"Error loading model: {str(e)}")
+        
+        with mgmt_tabs[1]:
+            st.subheader("Prediction Interface")
+            st.write("Enter feature values to get predictions from the trained model")
+            
+            # Create input fields for each feature
+            input_data = {}
+            cols = st.columns(min(3, n_features))
+            
+            for idx, feature in enumerate(st.session_state.feature_names):
+                with cols[idx % 3]:
+                    input_data[feature] = st.number_input(
+                        feature,
+                        value=0.0,
+                        format="%.2f",
+                        key=f"pred_{feature}"
+                    )
+            
+            if st.button("🎯 Predict"):
+                # Prepare input
+                X_pred = np.array([list(input_data.values())])
+                
+                # Scale if needed
+                if 'scaler' in st.session_state and st.session_state.scaler is not None:
+                    X_pred = st.session_state.scaler.transform(X_pred)
+                
+                # Make prediction
+                prediction = st.session_state.model.predict(X_pred)[0]
+                
+                st.success(f"**Prediction: {prediction:.4f}**")
+                
+                # If classification, show probabilities
+                if problem_type == "Classification" and hasattr(st.session_state.model, 'predict_proba'):
+                    proba = st.session_state.model.predict_proba(X_pred)[0]
+                    proba_df = pd.DataFrame({
+                        'Class': range(len(proba)),
+                        'Probability': proba
+                    })
+                    fig = px.bar(proba_df, x='Class', y='Probability',
+                               title="Class Probabilities")
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        with mgmt_tabs[2]:
+            st.subheader("Experiment History")
+            
+            # Save current experiment
+            if st.button("💾 Save Current Experiment"):
+                st.session_state.experiment_counter += 1
+                experiment = {
+                    'id': st.session_state.experiment_counter,
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'algorithm': algorithm,
+                    'problem_type': problem_type,
+                    'n_samples': n_samples,
+                    'n_features': n_features,
+                    'test_size': test_size,
+                }
+                
+                if problem_type == "Regression":
+                    experiment.update({
+                        'test_mse': mean_squared_error(st.session_state.y_test, st.session_state.y_pred_test),
+                        'test_r2': r2_score(st.session_state.y_test, st.session_state.y_pred_test),
+                        'test_mae': mean_absolute_error(st.session_state.y_test, st.session_state.y_pred_test)
+                    })
+                else:
+                    experiment.update({
+                        'test_accuracy': accuracy_score(st.session_state.y_test, st.session_state.y_pred_test)
+                    })
+                
+                st.session_state.experiment_history.append(experiment)
+                st.success(f"✅ Experiment #{st.session_state.experiment_counter} saved!")
+            
+            # Display history
+            if st.session_state.experiment_history:
+                history_df = pd.DataFrame(st.session_state.experiment_history)
+                st.dataframe(history_df, use_container_width=True)
+                
+                # Download history
+                csv = history_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download History CSV",
+                    data=csv,
+                    file_name=f"experiment_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("No experiments saved yet. Click 'Save Current Experiment' to start tracking.")
+        
+        with mgmt_tabs[3]:
+            st.subheader("Export Analysis Report")
+            
+            if st.button("📄 Generate HTML Report"):
+                # Create HTML report
+                html_report = f"""
+                <html>
+                <head>
+                    <title>Model Analysis Report</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                        h1 {{ color: #1f77b4; }}
+                        h2 {{ color: #ff7f0e; margin-top: 30px; }}
+                        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                        th {{ background-color: #1f77b4; color: white; }}
+                        .metric {{ background-color: #f0f0f0; padding: 15px; margin: 10px 0; border-radius: 5px; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>📊 Synthetic Data Modeling Report</h1>
+                    <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+                    
+                    <h2>Dataset Information</h2>
+                    <div class="metric">
+                        <p><strong>Problem Type:</strong> {problem_type}</p>
+                        <p><strong>Algorithm:</strong> {algorithm}</p>
+                        <p><strong>Samples:</strong> {n_samples}</p>
+                        <p><strong>Features:</strong> {n_features}</p>
+                        <p><strong>Test Size:</strong> {test_size*100:.0f}%</p>
+                    </div>
+                    
+                    <h2>Model Performance</h2>
+                """
+                
+                if problem_type == "Regression":
+                    test_mse = mean_squared_error(st.session_state.y_test, st.session_state.y_pred_test)
+                    test_r2 = r2_score(st.session_state.y_test, st.session_state.y_pred_test)
+                    test_mae = mean_absolute_error(st.session_state.y_test, st.session_state.y_pred_test)
+                    
+                    html_report += f"""
+                    <div class="metric">
+                        <p><strong>Test MSE:</strong> {test_mse:.4f}</p>
+                        <p><strong>Test R²:</strong> {test_r2:.4f}</p>
+                        <p><strong>Test MAE:</strong> {test_mae:.4f}</p>
+                    </div>
+                    """
+                else:
+                    test_acc = accuracy_score(st.session_state.y_test, st.session_state.y_pred_test)
+                    html_report += f"""
+                    <div class="metric">
+                        <p><strong>Test Accuracy:</strong> {test_acc:.4f}</p>
+                    </div>
+                    
+                    <h2>Classification Report</h2>
+                    """
+                    report = classification_report(st.session_state.y_test, st.session_state.y_pred_test, output_dict=True)
+                    report_df = pd.DataFrame(report).transpose()
+                    html_report += report_df.to_html()
+                
+                html_report += """
+                    <h2>Feature Names</h2>
+                    <ul>
+                """
+                for feature in st.session_state.feature_names:
+                    html_report += f"<li>{feature}</li>"
+                
+                html_report += """
+                    </ul>
+                </body>
+                </html>
+                """
+                
+                st.download_button(
+                    label="📥 Download HTML Report",
+                    data=html_report,
+                    file_name=f"model_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                    mime="text/html"
+                )
+                st.success("✅ Report generated! Click button above to download.")
 
 else:
     # Welcome screen
