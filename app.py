@@ -68,6 +68,21 @@ if model_type == "Classification":
     n_classes = st.sidebar.slider("Number of Classes", 2, 5, 2, 1)
     n_informative = st.sidebar.slider("Informative Features", 2, n_features, min(3, n_features), 1)
 
+# Custom naming options
+st.sidebar.subheader("Naming Options")
+use_custom_names = st.sidebar.checkbox("Use Custom Names", value=False)
+
+if use_custom_names:
+    dataset_name = st.sidebar.text_input("Dataset Name", value="MyDataset")
+    target_name = st.sidebar.text_input("Target Variable Name", value="Target")
+    
+    st.sidebar.markdown("**Feature Names** (comma-separated)")
+    custom_features = st.sidebar.text_area(
+        "Enter feature names",
+        value=", ".join([f"Feature_{i+1}" for i in range(n_features)]),
+        help="Enter feature names separated by commas. Number of names should match number of features."
+    )
+
 # Generate Data Button
 generate_data = st.sidebar.button("🎲 Generate Data", type="primary")
 
@@ -104,16 +119,36 @@ if generate_data or st.session_state.data_generated:
             )
             problem_type = "Classification"
         
-        # Create DataFrame
-        feature_names = [f'Feature_{i+1}' for i in range(n_features)]
+        # Create DataFrame with custom or default names
+        if use_custom_names:
+            # Parse custom feature names
+            feature_list = [name.strip() for name in custom_features.split(',')]
+            
+            # Validate number of feature names
+            if len(feature_list) != n_features:
+                st.warning(f"⚠️ Number of feature names ({len(feature_list)}) doesn't match number of features ({n_features}). Using default names.")
+                feature_names = [f'Feature_{i+1}' for i in range(n_features)]
+                target_col = 'Target'
+                dataset_title = "Synthetic Dataset"
+            else:
+                feature_names = feature_list
+                target_col = target_name if target_name else 'Target'
+                dataset_title = dataset_name if dataset_name else "Synthetic Dataset"
+        else:
+            feature_names = [f'Feature_{i+1}' for i in range(n_features)]
+            target_col = 'Target'
+            dataset_title = "Synthetic Dataset"
+        
         df = pd.DataFrame(X, columns=feature_names)
-        df['Target'] = y
+        df[target_col] = y
         
         # Store in session state
         st.session_state.df = df
         st.session_state.X = X
         st.session_state.y = y
         st.session_state.feature_names = feature_names
+        st.session_state.target_col = target_col
+        st.session_state.dataset_title = dataset_title
         st.session_state.problem_type = problem_type
     
     col1, col2, col3 = st.columns(3)
@@ -124,16 +159,18 @@ if generate_data or st.session_state.data_generated:
     with col3:
         st.metric("Problem Type", problem_type)
     
-    st.success("✅ Data generated successfully!")
+    st.success(f"✅ Data generated successfully: **{st.session_state.dataset_title}**")
     
     # Download button for generated data
     col_download1, col_download2 = st.columns([3, 1])
     with col_download2:
         csv = st.session_state.df.to_csv(index=False).encode('utf-8')
+        # Use custom dataset name for file if provided
+        file_name = st.session_state.dataset_title.lower().replace(' ', '_') if use_custom_names else f'synthetic_data_{problem_type.lower()}_{n_samples}samples'
         st.download_button(
             label="📥 Download CSV",
             data=csv,
-            file_name=f'synthetic_data_{problem_type.lower()}_{n_samples}samples.csv',
+            file_name=f'{file_name}.csv',
             mime='text/csv',
             help="Download the generated dataset as CSV"
         )
@@ -178,8 +215,9 @@ if generate_data or st.session_state.data_generated:
         st.plotly_chart(fig, use_container_width=True)
         
         # Show top correlations with target
-        target_corr = corr_matrix['Target'].drop('Target').sort_values(ascending=False)
-        st.subheader("Top Features Correlated with Target")
+        target_col = st.session_state.target_col
+        target_corr = corr_matrix[target_col].drop(target_col).sort_values(ascending=False)
+        st.subheader(f"Top Features Correlated with {target_col}")
         col1, col2 = st.columns(2)
         with col1:
             st.write("**Positive Correlations:**")
@@ -189,20 +227,20 @@ if generate_data or st.session_state.data_generated:
             st.dataframe(target_corr.tail(5))
     
     with tab4:
-        st.subheader("Target Variable Analysis")
+        st.subheader(f"{st.session_state.target_col} Variable Analysis")
         if problem_type == "Classification":
-            fig = px.histogram(st.session_state.df, x='Target', 
-                             title="Target Class Distribution",
-                             color='Target')
+            fig = px.histogram(st.session_state.df, x=st.session_state.target_col, 
+                             title=f"{st.session_state.target_col} Class Distribution",
+                             color=st.session_state.target_col)
             st.plotly_chart(fig, use_container_width=True)
             
             # Class distribution
-            class_dist = st.session_state.df['Target'].value_counts()
+            class_dist = st.session_state.df[st.session_state.target_col].value_counts()
             st.write("**Class Distribution:**")
             st.dataframe(class_dist)
         else:
-            fig = px.histogram(st.session_state.df, x='Target', nbins=50,
-                             title="Target Variable Distribution")
+            fig = px.histogram(st.session_state.df, x=st.session_state.target_col, nbins=50,
+                             title=f"{st.session_state.target_col} Variable Distribution")
             st.plotly_chart(fig, use_container_width=True)
             
             col1, col2 = st.columns(2)
