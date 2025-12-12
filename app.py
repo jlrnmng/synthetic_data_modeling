@@ -22,6 +22,7 @@ import io
 import base64
 from datetime import datetime
 import json
+import math
 
 # Set page config
 st.set_page_config(page_title="Synthetic Data Modeling", layout="wide")
@@ -979,11 +980,22 @@ if generate_data or st.session_state.data_generated:
                         random_state=random_state + 1
                     )
                 else:
-                    n_inf_sim = min(n_informative, n_sim_features)
+                    # Choose a valid n_informative for make_classification
+                    # Ensure at least 1 informative and no more than n_sim_features
+                    n_inf_sim = max(1, min(n_informative, n_sim_features))
+
+                    # If number of classes exceeds 2**n_informative, increase informative features if possible
+                    if n_classes > 2 ** n_inf_sim:
+                        needed = math.ceil(math.log2(n_classes))
+                        n_inf_sim = min(max(n_inf_sim, needed), n_sim_features)
+
+                    # Explicitly set redundant/repeated to 0 to avoid implicit validation issues
                     X_sim, y_sim_actual = make_classification(
                         n_samples=n_simulations,
                         n_features=n_sim_features,
                         n_informative=n_inf_sim,
+                        n_redundant=0,
+                        n_repeated=0,
                         n_classes=n_classes,
                         random_state=random_state + 1,
                         flip_y=noise/100
