@@ -97,7 +97,7 @@ else:
 
 # Dataset parameters
 st.sidebar.subheader("Dataset Parameters")
-n_samples = st.sidebar.slider("Number of Samples", 100, 5000, 1000, 100)
+n_samples = st.sidebar.slider("Number of Samples", 100, 10000, 1000, 100)
 n_features = st.sidebar.slider("Number of Features", 2, 20, 5, 1)
 noise = st.sidebar.slider("Noise Level", 0.0, 50.0, 10.0, 1.0)
 random_state = st.sidebar.number_input("Random State", 0, 1000, 42)
@@ -979,7 +979,7 @@ if generate_data or st.session_state.data_generated:
         # Step 5: Simulate Outcomes
         st.markdown('<h2 class="sub-header">5️⃣ Generate Simulated Outcomes</h2>', unsafe_allow_html=True)
         
-        n_simulations = st.slider("Number of Simulations", 100, 5000, 1000, 100)
+        n_simulations = st.slider("Number of Simulations", 100, 10000, 1000, 100)
         
         if st.button("🎲 Run Simulation"):
             with st.spinner("Running simulations..."):
