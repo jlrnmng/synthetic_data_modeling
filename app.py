@@ -1127,26 +1127,98 @@ if generate_data or st.session_state.data_generated:
             if st.button("Predict"):
                 # Prepare input
                 X_pred = np.array([list(input_data.values())])
-                
+
                 # Scale if needed
                 if 'scaler' in st.session_state and st.session_state.scaler is not None:
                     X_pred = st.session_state.scaler.transform(X_pred)
-                
+
                 # Make prediction
                 prediction = st.session_state.model.predict(X_pred)[0]
-                
-                st.success(f"**Prediction: {prediction:.4f}**")
-                
-                # If classification, show probabilities
+
+                # If classification and target is rain-like, show human-friendly phrasing
+                if problem_type == "Classification":
+                    try:
+                        target_name = st.session_state.target_col
+                    except Exception:
+                        target_name = 'Target'
+
+                    if isinstance(target_name, str) and 'rain' in target_name.lower():
+                        # Map numeric prediction to requested phrasing
+                        try:
+                            pred_int = int(prediction)
+                        except Exception:
+                            pred_int = prediction
+
+                        if pred_int == 1:
+                            st.success("**Prediction: It might rain tomorrow.**")
+                        else:
+                            st.success("**Prediction: It will not rain tomorrow.**")
+                    else:
+                        # Default numeric display for unknown targets
+                        try:
+                            st.success(f"**Prediction: {prediction:.4f}**")
+                        except Exception:
+                            st.success(f"**Prediction: {prediction}**")
+
+                # If classification, show probabilities using readable labels when possible
                 if problem_type == "Classification" and hasattr(st.session_state.model, 'predict_proba'):
                     proba = st.session_state.model.predict_proba(X_pred)[0]
+                    classes = list(getattr(st.session_state.model, 'classes_', list(range(len(proba)))))
+
+                    # Map class indices to readable labels for rain target
+                    if isinstance(target_name, str) and 'rain' in target_name.lower() and len(classes) == 2:
+                        labels = ['It will not rain tomorrow', 'It might rain tomorrow']
+                    else:
+                        labels = [f'Class {c}' for c in classes]
+
                     proba_df = pd.DataFrame({
-                        'Class': range(len(proba)),
+                        'Class': labels,
                         'Probability': proba
                     })
                     fig = px.bar(proba_df, x='Class', y='Probability',
                                title="Class Probabilities")
                     st.plotly_chart(fig, use_container_width=True)
+
+                    # Diagnostic info to help understand model bias
+                    with st.expander('Prediction Diagnostics'):
+                        st.write('**Model classes:**', classes)
+                        # Show training class distribution if available
+                        if 'y_train' in st.session_state:
+                            try:
+                                dist = pd.Series(st.session_state.y_train).value_counts().sort_index()
+                                st.write('**Training class distribution:**')
+                                st.dataframe(dist.rename('Count'))
+                            except Exception:
+                                pass
+
+                        # Show a decision threshold slider and mapped label
+                        thresh = st.slider('Decision threshold for positive class', 0.01, 0.99, 0.5, 0.01)
+                        # assume positive class is classes[-1]
+                        pos_idx = len(proba) - 1
+                        pos_prob = float(proba[pos_idx])
+                        st.write(f'Positive-class probability: {pos_prob:.3f}')
+                        if pos_prob >= thresh:
+                            st.success('Decision at this threshold: It might rain tomorrow.')
+                        else:
+                            st.info('Decision at this threshold: It will not rain tomorrow.')
+
+                        # Show feature importance / coefficients when available
+                        if hasattr(st.session_state.model, 'coef_'):
+                            coef = st.session_state.model.coef_
+                            try:
+                                coef_vals = coef[0] if coef.ndim > 1 else coef
+                                coef_df = pd.DataFrame({'Feature': st.session_state.feature_names, 'Coefficient': coef_vals})
+                                st.write('**Model coefficients:**')
+                                st.dataframe(coef_df)
+                            except Exception:
+                                pass
+                        elif hasattr(st.session_state.model, 'feature_importances_'):
+                            try:
+                                imp_df = pd.DataFrame({'Feature': st.session_state.feature_names, 'Importance': st.session_state.model.feature_importances_})
+                                st.write('**Feature importances:**')
+                                st.dataframe(imp_df.sort_values('Importance', ascending=False))
+                            except Exception:
+                                pass
         
         with mgmt_tabs[2]:
             st.subheader("Experiment History")
