@@ -22,12 +22,19 @@ This project implements a complete data modeling workflow:
 - **Multiple Algorithms** - Linear/Logistic Regression, Random Forest, Decision Tree, SVM
 - **Custom Naming** - Name your datasets, features, and target variables
 
+Note: The app now generates datasets that mimic common weather features. The minimal/base schema (used for modeling) includes these core fields:
+
+- `Location`, `MinTemp`, `MaxTemp`, `Rainfall`, `RainTomorrow` (target: 0/1)
+
+Full generated data also includes `Temp9am`, `Temp3pm`, `Humidity9am`, `Humidity3pm`, `WindSpeed9am`, `WindSpeed3pm`, and `RainToday`.
+
+### Data Analysis
 ### Data Analysis
 - **Comprehensive EDA** - Statistical summaries, distributions, correlations, and target analysis
-- **3D Visualizations** - Interactive 3D scatter plots for feature relationships
+- **Visualizations** - 2D and 3D interactive scatter plots for feature relationships
 - **Feature Engineering** - Logarithmic, exponential, square root, and polynomial transforms
 - **Feature Selection** - SelectKBest and Recursive Feature Elimination (RFE)
-- **Dimensionality Reduction** - PCA with explained variance visualization
+   - **Step 2.5**: Apply feature engineering, selection, PCA, and visualizations (2D & 3D)
 
 ### Model Training & Evaluation
 - **5 ML Algorithms** - Choose from multiple regression and classification models
@@ -99,7 +106,7 @@ streamlit run app.py
 4. Explore the comprehensive workflow:
    - **Step 1**: View dataset samples and download CSV
    - **Step 2**: Analyze distributions, correlations, and target variables
-   - **Step 2.5**: Apply feature engineering, selection, PCA, and 3D visualization
+   - **Step 2.5**: Apply feature engineering, selection, PCA, and visualizations (2D & 3D)
    - **Step 3**: Train your model with chosen algorithm
    - **Step 4**: Evaluate with advanced metrics and visualizations
    - **Step 5**: Run simulations to test model predictions
@@ -204,8 +211,7 @@ pip install -r requirements.txt --upgrade
 ```
 
 **Issue: Dark mode not working**
-- Click the " Toggle Theme" button at the top of the page
-- Refresh the browser if needed
+Dark-mode toggle was removed; theme is controlled by the app's CSS. Refresh the browser if needed.
 
 **Issue: Models not saving**
 - Ensure you have write permissions in the directory

@@ -22,7 +22,6 @@ import io
 import base64
 from datetime import datetime
 import json
-import math
 
 # Set page config
 st.set_page_config(page_title="Synthetic Data Modeling", layout="wide")
@@ -81,22 +80,19 @@ st.markdown("---")
 st.sidebar.header("Configuration")
 model_type = st.sidebar.selectbox(
     "Select Model Type",
-    ["Classification", "Regression"],
-    index=0
+    ["Regression", "Classification"]
 )
 
 # Algorithm selection
 if model_type == "Regression":
     algorithm = st.sidebar.selectbox(
         "Select Algorithm",
-        ["Linear Regression", "Random Forest", "Decision Tree", "Support Vector Machine"],
-        index=3  # default to Support Vector Machine for regression
+        ["Linear Regression", "Random Forest", "Decision Tree", "Support Vector Machine"]
     )
 else:
     algorithm = st.sidebar.selectbox(
         "Select Algorithm",
-        ["Logistic Regression", "Random Forest", "Decision Tree", "Support Vector Machine"],
-        index=0  # default to Logistic Regression for classification
+        ["Logistic Regression", "Random Forest", "Decision Tree", "Support Vector Machine"]
     )
 
 # Dataset parameters
@@ -170,27 +166,9 @@ if generate_data or st.session_state.data_generated:
         Rainfall = np.where(rain_events, np.round(np.random.exponential(scale=5, size=n_samples), 1), 0.0)
         RainToday = (Rainfall > 0).astype(int)
 
-        # RainTomorrow probability influenced by Humidity3pm, Rainfall, Temp3pm
-        desired_pos_frac = 0.55
-
-        base_logits = 0.04 * Humidity3pm + 0.2 * (Rainfall > 0) + 0.01 * (20 - Temp3pm)
-
-        # Binary search for intercept c such that mean(sigmoid(base_logits + c)) ~= desired_pos_frac
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
-
-        lo, hi = -6.0, 6.0
-        for _ in range(40):
-            mid = (lo + hi) / 2.0
-            mean_p = sigmoid(base_logits + mid).mean()
-            if mean_p > desired_pos_frac:
-                hi = mid
-            else:
-                lo = mid
-
-        bias_offset = (lo + hi) / 2.0
-        logits = base_logits + bias_offset
-        prob_tom = sigmoid(logits)
+        # RainTomorrow probability
+        logits = -3 + 0.04 * Humidity3pm + 0.2 * (Rainfall > 0) + 0.01 * (20 - Temp3pm)
+        prob_tom = 1 / (1 + np.exp(-logits))
         RainTomorrow = (np.random.rand(n_samples) < prob_tom).astype(int)
 
         df = pd.DataFrame({
@@ -369,13 +347,144 @@ if generate_data or st.session_state.data_generated:
                 st.metric("Min", f"{st.session_state.y.min():.2f}")
                 st.metric("Max", f"{st.session_state.y.max():.2f}")
     
-    # Step 2.5: Visualizations (removed feature transforms/selection/PCA for simplicity)
-    st.markdown('<h2 class="sub-header">2.5️⃣ Visualizations & Quick Analysis</h2>', unsafe_allow_html=True)
-    fe_tabs = st.tabs(["Visualizations"])
-
+    # Step 2.5: Advanced Feature Engineering & Analysis
+    st.markdown('<h2 class="sub-header">2.5️⃣ Advanced Feature Engineering & Analysis</h2>', unsafe_allow_html=True)
+    
+    fe_tabs = st.tabs(["Feature Transforms", "Feature Selection", "Dimensionality Reduction", "Visualizations"])
+    
     with fe_tabs[0]:
+        st.subheader("Feature Transformations")
+        st.write("Apply mathematical transformations to features")
+        
+        transform_type = st.selectbox(
+            "Select Transformation",
+            ["None", "Logarithmic (log1p)", "Exponential", "Square Root", "Square"]
+        )
+        
+        if transform_type != "None":
+            transform_features = st.multiselect(
+                "Select features to transform",
+                st.session_state.feature_names,
+                default=[]
+            )
+            
+            if transform_features and st.button("Apply Transformation"):
+                df_transformed = st.session_state.df.copy()
+                for feature in transform_features:
+                    if transform_type == "Logarithmic (log1p)":
+                        df_transformed[f"{feature}_log"] = np.log1p(df_transformed[feature] - df_transformed[feature].min() + 1)
+                    elif transform_type == "Exponential":
+                        df_transformed[f"{feature}_exp"] = np.exp(df_transformed[feature])
+                    elif transform_type == "Square Root":
+                        df_transformed[f"{feature}_sqrt"] = np.sqrt(df_transformed[feature] - df_transformed[feature].min())
+                    elif transform_type == "Square":
+                        df_transformed[f"{feature}_sq"] = df_transformed[feature] ** 2
+                
+                st.session_state.df_transformed = df_transformed
+                st.success(f"Applied {transform_type} transformation to {len(transform_features)} features")
+                st.dataframe(df_transformed.head(), use_container_width=True)
+    
+    with fe_tabs[1]:
+        st.subheader("Automated Feature Selection")
+        
+        selection_method = st.radio(
+            "Select Method",
+            ["SelectKBest", "Recursive Feature Elimination (RFE)"]
+        )
+        
+        k_features = st.slider("Number of features to select", 1, n_features, min(5, n_features))
+        
+        if st.button("Run Feature Selection"):
+            with st.spinner("Selecting features..."):
+                if selection_method == "SelectKBest":
+                    if problem_type == "Classification":
+                        selector = SelectKBest(f_classif, k=k_features)
+                    else:
+                        selector = SelectKBest(f_regression, k=k_features)
+                    selector.fit(st.session_state.X, st.session_state.y)
+                    scores = selector.scores_
+                    selected_mask = selector.get_support()
+                else:  # RFE
+                    if problem_type == "Classification":
+                        estimator = RandomForestClassifier(n_estimators=50, random_state=random_state)
+                    else:
+                        estimator = RandomForestRegressor(n_estimators=50, random_state=random_state)
+                    selector = RFE(estimator, n_features_to_select=k_features)
+                    selector.fit(st.session_state.X, st.session_state.y)
+                    selected_mask = selector.support_
+                    scores = selector.ranking_
+                
+                # Create results dataframe
+                results_df = pd.DataFrame({
+                    'Feature': st.session_state.feature_names,
+                    'Selected': selected_mask,
+                    'Score/Rank': scores
+                }).sort_values('Score/Rank', ascending=(selection_method == "RFE"))
+                
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Visualization
+                fig = px.bar(results_df, x='Feature', y='Score/Rank', 
+                            color='Selected',
+                            title=f"Feature {selection_method} Results")
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.session_state.selected_features = [f for f, s in zip(st.session_state.feature_names, selected_mask) if s]
+    
+    with fe_tabs[2]:
+        st.subheader("PCA - Dimensionality Reduction")
+        
+        n_components = st.slider("Number of Components", 2, min(10, n_features), 2)
+        
+        if st.button("Apply PCA"):
+            with st.spinner("Performing PCA..."):
+                pca = PCA(n_components=n_components)
+                X_pca = pca.fit_transform(st.session_state.X)
+                
+                # Explained variance
+                explained_var = pca.explained_variance_ratio_
+                cumulative_var = np.cumsum(explained_var)
+                
+                st.session_state.X_pca = X_pca
+                st.session_state.pca = pca
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Scree plot
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=[f'PC{i+1}' for i in range(n_components)],
+                        y=explained_var * 100,
+                        name='Individual'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=[f'PC{i+1}' for i in range(n_components)],
+                        y=cumulative_var * 100,
+                        name='Cumulative',
+                        yaxis='y2'
+                    ))
+                    fig.update_layout(
+                        title='Explained Variance by Component',
+                        yaxis=dict(title='Variance Explained (%)'),
+                        yaxis2=dict(title='Cumulative (%)', overlaying='y', side='right')
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    # PCA scatter plot
+                    pca_df = pd.DataFrame(X_pca[:, :2], columns=['PC1', 'PC2'])
+                    pca_df['Target'] = st.session_state.y
+                    
+                    fig = px.scatter(pca_df, x='PC1', y='PC2', color='Target',
+                                   title='PCA: First Two Components')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                st.info(f"Total variance explained by {n_components} components: {cumulative_var[-1]*100:.2f}%")
+    
+    with fe_tabs[3]:
         st.subheader("Visualizations")
- 
+
         # 2D Visualization
         st.write("**2D Feature Relationships**")
         if n_features >= 2:
@@ -456,18 +565,6 @@ if generate_data or st.session_state.data_generated:
         test_size = st.slider("Test Set Size (%)", 10, 50, 20, 5) / 100
     with col2:
         scale_features = st.checkbox("Scale Features", value=True)
-
-    # Regularization options (simplified)
-    reg_penalty = None
-    reg_C = 1.0
-    if algorithm == "Logistic Regression":
-        colr1, colr2 = st.columns(2)
-        with colr1:
-            reg_penalty = st.selectbox("Regularization (Logistic)", ["l2", "l1"], index=0)
-        with colr2:
-            reg_C = st.number_input("Inverse Regularization (C)", min_value=0.0001, max_value=100.0, value=1.0, format="%.4f")
-    elif algorithm == "Support Vector Machine":
-        reg_C = st.number_input("SVM C (regularization)", min_value=0.0001, max_value=100.0, value=1.0, format="%.4f")
     
     train_model = st.button("Train Model", type="primary")
     
@@ -522,18 +619,13 @@ if generate_data or st.session_state.data_generated:
                 st.session_state.y_pred_test = y_pred_test
             else:
                 if algorithm == "Logistic Regression":
-                    # apply chosen regularization
-                    if reg_penalty == 'l1':
-                        solver = 'liblinear'
-                    else:
-                        solver = 'lbfgs'
-                    model = LogisticRegression(max_iter=1000, random_state=random_state, penalty=reg_penalty or 'l2', C=reg_C, solver=solver)
+                    model = LogisticRegression(max_iter=1000, random_state=random_state)
                 elif algorithm == "Random Forest":
                     model = RandomForestClassifier(n_estimators=100, random_state=random_state)
                 elif algorithm == "Decision Tree":
                     model = DecisionTreeClassifier(random_state=random_state)
                 elif algorithm == "Support Vector Machine":
-                    model = SVC(kernel='rbf', C=reg_C if reg_C is not None else 1.0, probability=True, random_state=random_state)
+                    model = SVC(kernel='rbf', random_state=random_state)
                 
                 model.fit(X_train, y_train)
                 y_pred_train = model.predict(X_train)
@@ -989,57 +1081,32 @@ if generate_data or st.session_state.data_generated:
         
         if st.button("🎲 Run Simulation"):
             with st.spinner("Running simulations..."):
-                # Generate new synthetic data using same feature count as the trained model
-                n_sim_features = len(st.session_state.feature_names) if 'feature_names' in st.session_state else n_features
-
+                # Generate new synthetic data
                 if problem_type == "Regression":
                     X_sim, y_sim_actual = make_regression(
                         n_samples=n_simulations,
-                        n_features=n_sim_features,
+                        n_features=n_features,
                         noise=noise,
                         random_state=random_state + 1
                     )
                 else:
-                    # Choose a valid n_informative for make_classification
-                    # Ensure at least 1 informative and no more than n_sim_features
-                    n_inf_sim = max(1, min(n_informative, n_sim_features))
-
-                    # If number of classes exceeds 2**n_informative, increase informative features if possible
-                    if n_classes > 2 ** n_inf_sim:
-                        needed = math.ceil(math.log2(n_classes))
-                        n_inf_sim = min(max(n_inf_sim, needed), n_sim_features)
-
-                    # Explicitly set redundant/repeated to 0 to avoid implicit validation issues
                     X_sim, y_sim_actual = make_classification(
                         n_samples=n_simulations,
-                        n_features=n_sim_features,
-                        n_informative=n_inf_sim,
-                        n_redundant=0,
-                        n_repeated=0,
+                        n_features=n_features,
+                        n_informative=n_informative,
                         n_classes=n_classes,
                         random_state=random_state + 1,
                         flip_y=noise/100
                     )
-
-                # Scale if needed and possible (only transform when scaler exists)
-                if scale_features and 'scaler' in st.session_state and st.session_state.scaler is not None:
-                    try:
-                        X_sim_scaled = st.session_state.scaler.transform(X_sim)
-                    except Exception:
-                        # Fallback: don't scale if transform fails
-                        X_sim_scaled = X_sim
+                
+                # Scale if needed
+                if scale_features:
+                    X_sim_scaled = st.session_state.scaler.transform(X_sim)
                 else:
                     X_sim_scaled = X_sim
                 
                 # Predict
                 y_sim_pred = st.session_state.model.predict(X_sim_scaled)
-                # Persist last simulation results for reporting
-                try:
-                    st.session_state.last_sim_actual = np.array(y_sim_actual)
-                    st.session_state.last_sim_pred = np.array(y_sim_pred)
-                    st.session_state.last_sim_n = int(n_simulations)
-                except Exception:
-                    pass
                 
                 st.success(f"Generated {n_simulations} simulated predictions!")
                 
@@ -1077,19 +1144,6 @@ if generate_data or st.session_state.data_generated:
                                      y_sim_pred.min(), y_sim_pred.max()]
                     })
                     st.dataframe(comp_df, use_container_width=True)
-                    # Save simulation summary metrics into session_state for later report
-                    try:
-                        if problem_type == "Regression":
-                            st.session_state.last_sim_metrics = {
-                                'sim_mse': float(sim_mse),
-                                'sim_r2': float(sim_r2)
-                            }
-                        else:
-                            st.session_state.last_sim_metrics = {
-                                'sim_acc': float(sim_acc)
-                            }
-                    except Exception:
-                        pass
         
         # Step 6: Model Management & Deployment
         st.markdown('<h2 class="sub-header">6️⃣ Model Management & Deployment</h2>', unsafe_allow_html=True)
@@ -1164,116 +1218,26 @@ if generate_data or st.session_state.data_generated:
             if st.button("Predict"):
                 # Prepare input
                 X_pred = np.array([list(input_data.values())])
-
+                
                 # Scale if needed
                 if 'scaler' in st.session_state and st.session_state.scaler is not None:
                     X_pred = st.session_state.scaler.transform(X_pred)
-
+                
                 # Make prediction
                 prediction = st.session_state.model.predict(X_pred)[0]
-
-                # If classification and target is rain-like, show human-friendly phrasing
-                if problem_type == "Classification":
-                    try:
-                        target_name = st.session_state.target_col
-                    except Exception:
-                        target_name = 'Target'
-
-                    if isinstance(target_name, str) and 'rain' in target_name.lower():
-                        # Map numeric prediction to requested phrasing
-                        try:
-                            pred_int = int(prediction)
-                        except Exception:
-                            pred_int = prediction
-
-                        if pred_int == 1:
-                            st.success("**Prediction: It might rain tomorrow.**")
-                        else:
-                            st.success("**Prediction: It will not rain tomorrow.**")
-                    else:
-                        # Default numeric display for unknown targets
-                        try:
-                            st.success(f"**Prediction: {prediction:.4f}**")
-                        except Exception:
-                            st.success(f"**Prediction: {prediction}**")
-
-                # If classification, show probabilities using readable labels when possible
+                
+                st.success(f"**Prediction: {prediction:.4f}**")
+                
+                # If classification, show probabilities
                 if problem_type == "Classification" and hasattr(st.session_state.model, 'predict_proba'):
                     proba = st.session_state.model.predict_proba(X_pred)[0]
-                    classes = list(getattr(st.session_state.model, 'classes_', list(range(len(proba)))))
-
-                    # Map class indices to readable labels for rain target
-                    if isinstance(target_name, str) and 'rain' in target_name.lower() and len(classes) == 2:
-                        labels = ['It will not rain tomorrow', 'It might rain tomorrow']
-                    else:
-                        labels = [f'Class {c}' for c in classes]
-
                     proba_df = pd.DataFrame({
-                        'Class': labels,
+                        'Class': range(len(proba)),
                         'Probability': proba
                     })
                     fig = px.bar(proba_df, x='Class', y='Probability',
                                title="Class Probabilities")
                     st.plotly_chart(fig, use_container_width=True)
-
-                    # Diagnostic info to help understand model bias
-                    with st.expander('Prediction Diagnostics'):
-                        st.write('**Model classes:**', classes)
-                        # Show training class distribution if available
-                        if 'y_train' in st.session_state:
-                            try:
-                                dist = pd.Series(st.session_state.y_train).value_counts().sort_index()
-                                st.write('**Training class distribution:**')
-                                st.dataframe(dist.rename('Count'))
-                            except Exception:
-                                pass
-
-                        # Show a decision threshold slider and mapped label
-                        thresh = st.slider('Decision threshold for positive class', 0.01, 0.99, 0.5, 0.01)
-                        # assume positive class is classes[-1]
-                        pos_idx = len(proba) - 1
-                        pos_prob = float(proba[pos_idx])
-                        st.write(f'Positive-class probability: {pos_prob:.3f}')
-                        if pos_prob >= thresh:
-                            st.success('Decision at this threshold: It might rain tomorrow.')
-                        else:
-                            st.info('Decision at this threshold: It will not rain tomorrow.')
-
-                        # Show feature importance / coefficients when available
-                        if hasattr(st.session_state.model, 'coef_'):
-                            coef = st.session_state.model.coef_
-                            try:
-                                coef_vals = coef[0] if coef.ndim > 1 else coef
-                                coef_df = pd.DataFrame({'Feature': st.session_state.feature_names, 'Coefficient': coef_vals})
-                                # Display coefficients scaled by 100 (easier human interpretation)
-                                coef_df_display = coef_df.copy()
-                                coef_df_display['Coefficient'] = coef_df_display['Coefficient'] * 100.0
-                                st.write('**Model coefficients (scaled ×100):**')
-                                st.dataframe(coef_df_display.style.format({'Coefficient': '{:.2f}'}))
-                                # Human-readable interpretation for core features (using scaled values)
-                                st.write('**Feature effect interpretation:**')
-                                for _, r in coef_df_display.iterrows():
-                                    fname = r['Feature']
-                                    scaled_c = float(r['Coefficient'])
-                                    if scaled_c > 0:
-                                        st.write(f"- **{fname}**: higher {fname.lower()} increases the model's predicted chance of rain {abs(scaled_c):.2f}.")
-                                    elif scaled_c < 0:
-                                        st.write(f"- **{fname}**: higher {fname.lower()} decreases the model's predicted chance of rain {abs(scaled_c):.2f}.")
-                                    else:
-                                        st.write(f"- **{fname}**: no clear linear effect detected 0.00.")
-
-                                # Short domain explanation for the specific weather-like features
-                                st.markdown("**Domain notes:** Humidity reflects atmospheric moisture — higher humidity generally makes rain more likely.\n\nRainfall (today) indicates active precipitation systems and typically raises next-day rain probability.\n\nTemperature effects (MinTemp / MaxTemp) depend on local conditions; in this dataset higher daytime temperatures tend to slightly reduce rain probability if the coefficient is negative.")
-                            except Exception:
-                                pass
-                        elif hasattr(st.session_state.model, 'feature_importances_'):
-                            try:
-                                imp_df = pd.DataFrame({'Feature': st.session_state.feature_names, 'Importance': st.session_state.model.feature_importances_})
-                                st.write('**Feature importances:**')
-                                st.dataframe(imp_df.sort_values('Importance', ascending=False))
-                                st.write('**Feature interpretation note:** Importance values are non-directional; higher importance means the feature strongly influences predictions but does not indicate whether higher values increase or decrease rain probability. Use coefficients (linear models) to see direction.')
-                            except Exception:
-                                pass
         
         with mgmt_tabs[2]:
             st.subheader("Experiment History")
@@ -1381,45 +1345,6 @@ if generate_data or st.session_state.data_generated:
                     report_df = pd.DataFrame(report).transpose()
                     html_report += report_df.to_html()
                 
-                    # Include simulation comparison if available
-                    if 'last_sim_actual' in st.session_state and 'last_sim_pred' in st.session_state:
-                        try:
-                            sim_actual = np.array(st.session_state.last_sim_actual)
-                            sim_pred = np.array(st.session_state.last_sim_pred)
-                            sim_n = int(st.session_state.get('last_sim_n', len(sim_actual)))
-
-                            html_report += """
-                            <h2>Simulation Comparison</h2>
-                            <div class=\"metric\">"""
-
-                            if problem_type == 'Regression':
-                                sim_mse = mean_squared_error(sim_actual, sim_pred)
-                                sim_r2 = r2_score(sim_actual, sim_pred)
-                                html_report += f"<p><strong>Simulation MSE:</strong> {sim_mse:.4f}</p>"
-                                html_report += f"<p><strong>Simulation R²:</strong> {sim_r2:.4f}</p>"
-                            else:
-                                sim_acc = accuracy_score(sim_actual, sim_pred)
-                                # class distribution
-                                vals, counts = np.unique(sim_actual, return_counts=True)
-                                dist_html = ''.join([f"<li>{v}: {c}</li>" for v, c in zip(vals, counts)])
-                                html_report += f"<p><strong>Simulation Accuracy:</strong> {sim_acc:.4f}</p>"
-                                html_report += f"<p><strong>Simulation Class Distribution (actual):</strong></p><ul>{dist_html}</ul>"
-
-                            # Compare basic stats of original target vs simulated actual and predicted
-                            if 'df' in st.session_state and st.session_state.df is not None and st.session_state.target_col in st.session_state.df.columns:
-                                orig = st.session_state.df[st.session_state.target_col].values
-                                def stats_html(arr):
-                                    return f"Mean={np.mean(arr):.3f}, Std={np.std(arr):.3f}, Min={np.min(arr):.3f}, Max={np.max(arr):.3f}"
-
-                                html_report += "<h3>Statistical Comparison (Original vs Simulation)</h3>"
-                                html_report += f"<p><strong>Original target:</strong> {stats_html(orig)}</p>"
-                                html_report += f"<p><strong>Simulated actual:</strong> {stats_html(sim_actual)}</p>"
-                                html_report += f"<p><strong>Simulated predicted:</strong> {stats_html(sim_pred)}</p>"
-
-                            html_report += "</div>"
-                        except Exception:
-                            html_report += "<p>Simulation comparison unavailable due to missing or invalid data.</p>"
-
                 html_report += """
                     <h2>Feature Names</h2>
                     <ul>
