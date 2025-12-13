@@ -170,11 +170,7 @@ if generate_data or st.session_state.data_generated:
         Rainfall = np.where(rain_events, np.round(np.random.exponential(scale=5, size=n_samples), 1), 0.0)
         RainToday = (Rainfall > 0).astype(int)
 
-        # RainTomorrow probability
-        # Automatically find a small intercept shift so overall positive class
-        # prevalence is near the desired level (approx 55%). This avoids adding
-        # any UI controls while producing stable class counts for typical sample
-        # sizes used in the app.
+        # RainTomorrow probability influenced by Humidity3pm, Rainfall, Temp3pm
         desired_pos_frac = 0.55
 
         base_logits = 0.04 * Humidity3pm + 0.2 * (Rainfall > 0) + 0.01 * (20 - Temp3pm)
@@ -1037,6 +1033,13 @@ if generate_data or st.session_state.data_generated:
                 
                 # Predict
                 y_sim_pred = st.session_state.model.predict(X_sim_scaled)
+                # Persist last simulation results for reporting
+                try:
+                    st.session_state.last_sim_actual = np.array(y_sim_actual)
+                    st.session_state.last_sim_pred = np.array(y_sim_pred)
+                    st.session_state.last_sim_n = int(n_simulations)
+                except Exception:
+                    pass
                 
                 st.success(f"Generated {n_simulations} simulated predictions!")
                 
@@ -1074,6 +1077,19 @@ if generate_data or st.session_state.data_generated:
                                      y_sim_pred.min(), y_sim_pred.max()]
                     })
                     st.dataframe(comp_df, use_container_width=True)
+                    # Save simulation summary metrics into session_state for later report
+                    try:
+                        if problem_type == "Regression":
+                            st.session_state.last_sim_metrics = {
+                                'sim_mse': float(sim_mse),
+                                'sim_r2': float(sim_r2)
+                            }
+                        else:
+                            st.session_state.last_sim_metrics = {
+                                'sim_acc': float(sim_acc)
+                            }
+                    except Exception:
+                        pass
         
         # Step 6: Model Management & Deployment
         st.markdown('<h2 class="sub-header">6️⃣ Model Management & Deployment</h2>', unsafe_allow_html=True)
@@ -1365,6 +1381,45 @@ if generate_data or st.session_state.data_generated:
                     report_df = pd.DataFrame(report).transpose()
                     html_report += report_df.to_html()
                 
+                    # Include simulation comparison if available
+                    if 'last_sim_actual' in st.session_state and 'last_sim_pred' in st.session_state:
+                        try:
+                            sim_actual = np.array(st.session_state.last_sim_actual)
+                            sim_pred = np.array(st.session_state.last_sim_pred)
+                            sim_n = int(st.session_state.get('last_sim_n', len(sim_actual)))
+
+                            html_report += """
+                            <h2>Simulation Comparison</h2>
+                            <div class=\"metric\">"""
+
+                            if problem_type == 'Regression':
+                                sim_mse = mean_squared_error(sim_actual, sim_pred)
+                                sim_r2 = r2_score(sim_actual, sim_pred)
+                                html_report += f"<p><strong>Simulation MSE:</strong> {sim_mse:.4f}</p>"
+                                html_report += f"<p><strong>Simulation R²:</strong> {sim_r2:.4f}</p>"
+                            else:
+                                sim_acc = accuracy_score(sim_actual, sim_pred)
+                                # class distribution
+                                vals, counts = np.unique(sim_actual, return_counts=True)
+                                dist_html = ''.join([f"<li>{v}: {c}</li>" for v, c in zip(vals, counts)])
+                                html_report += f"<p><strong>Simulation Accuracy:</strong> {sim_acc:.4f}</p>"
+                                html_report += f"<p><strong>Simulation Class Distribution (actual):</strong></p><ul>{dist_html}</ul>"
+
+                            # Compare basic stats of original target vs simulated actual and predicted
+                            if 'df' in st.session_state and st.session_state.df is not None and st.session_state.target_col in st.session_state.df.columns:
+                                orig = st.session_state.df[st.session_state.target_col].values
+                                def stats_html(arr):
+                                    return f"Mean={np.mean(arr):.3f}, Std={np.std(arr):.3f}, Min={np.min(arr):.3f}, Max={np.max(arr):.3f}"
+
+                                html_report += "<h3>Statistical Comparison (Original vs Simulation)</h3>"
+                                html_report += f"<p><strong>Original target:</strong> {stats_html(orig)}</p>"
+                                html_report += f"<p><strong>Simulated actual:</strong> {stats_html(sim_actual)}</p>"
+                                html_report += f"<p><strong>Simulated predicted:</strong> {stats_html(sim_pred)}</p>"
+
+                            html_report += "</div>"
+                        except Exception:
+                            html_report += "<p>Simulation comparison unavailable due to missing or invalid data.</p>"
+
                 html_report += """
                     <h2>Feature Names</h2>
                     <ul>
